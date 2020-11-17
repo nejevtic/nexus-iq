@@ -1,0 +1,20 @@
+[Unit]
+Description=nexus-iq service
+After=network.target
+
+[Service]
+Type=forking
+Environment=JAVA_OPTS="-Ddw.proxy.hostname={{ proxy_fqdn }} -Ddw.proxy.port={{ proxy_port }}"
+WorkingDirectory={{ nexus_iq_os_base_directory }}/nexus-iq-server
+ExecStart=/usr/lib/jvm/jre-1.8.0-openjdk/bin/java -jar {{ nexus_iq_os_base_directory }}/nexus-iq-server/nexus-iq-server-{{ nexus_iq_version }}.jar server {{ nexus_iq_os_base_directory }}/nexus-iq-server/config.yml
+ExecStop=/bin/kill -15 $MAINPID
+User={{ nexus_owner }}
+Group={{ nexus_group }}
+KillMode=process
+KillSignal=SIGTERM
+Restart=on-failure
+StartLimitInterval=0
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,48 @@
+---
+- name: Set fact
+  set_fact:
+    role_comment: "( {{ nexus_iq_docker_container_name | default('nexus-iq') }} )"
+  tags:
+    - nexus-iq
+
+- name: Docker login
+  command: "docker login -u {{ docker_registry_user }} -p {{ vault_docker_registry_password }}"
+  register: docker_login
+  changed_when: false
+  tags:
+    - docker_login
+    - nexus-iq
+
+- name: Ensure container is started {{ role_comment }}
+  docker_container:
+    name: "{{ nexus_iq_docker_container_name }}"
+    state: started
+    detach: "true"
+    privileged: yes
+    recreate: no
+    restart_policy: unless-stopped
+    image: "{{ nexus_iq_docker_image_name }}{% if nexus_iq_docker_image_name %}:{% endif %}{{ nexus_iq_docker_image_tag }}"
+    published_ports: "{{ nexus_iq_docker_published_ports }}"
+    volumes: "{{ nexus_iq_docker_volumes }}"
+    docker_host: "{{ nexus_iq_docker_host }}"
+    env:
+      JAVA_OPTS: "-Ddw.proxy.hostname={{ proxy_fqdn }} -Ddw.proxy.port={{ proxy_port }}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.nexus-iq.rule: "Host(`{{ nexus_iq_fqdn_url }}`)"
+      traefik.http.routers.nexus-iq.entrypoints: "{{ traefik_insecure_entrypoint }}"
+      traefik.http.routers.nexus-iq.middlewares: "nexus-iq-https-redirect"
+      traefik.http.routers.nexus-iq.service: "nexus-iq"
+      traefik.http.routers.nexus-iq-secure.rule: "Host(`{{ nexus_iq_fqdn_url }}`)"
+      traefik.http.routers.nexus-iq-secure.entrypoints: "{{ traefik_secure_entrypoint }}"
+      traefik.http.routers.nexus-iq-secure.service: "nexus-iq"
+      traefik.http.routers.nexus-iq-secure.tls: "true"
+      traefik.http.services.nexus-iq.loadbalancer.server.port: "{{ nexus_iq_dashboard_port }}"
+      traefik.http.services.nexus-iq-secure.loadbalancer.server.port: "{{ nexus_iq_dashboard_port }}"
+      traefik.http.middlewares.nexus-iq-https-redirect.redirectscheme.scheme: "https"
+      traefik.docker.network: "{{ nexus_iq_network }}"
+    networks:
+      - name: "{{ nexus_iq_network }}"
+  tags:
+    - nexus_iq_start
+    - nexus-iq

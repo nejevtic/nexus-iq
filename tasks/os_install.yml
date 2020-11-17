@@ -1,0 +1,218 @@
+---
+
+- name: Check if certificate exists
+  stat:
+    path: "{{ nexus_iq_ssl_dir }}/{{ inventory_hostname }}.pem"
+  register: ipa_cert_stat
+  tags:
+    - os_install
+    - os_cert
+    - nexus-iq
+    - os_deployment
+
+# In case HTTP service certificate needs to be created additionally use something similar to
+- name: Check if certificate exists
+  stat:
+    path: "{{ nexus_iq_ssl_dir }}/{{ nexus_iq_fqdn }}.pem"
+  register: ipa_cert_service_stat
+  tags:
+    - os_install
+    - os_cert
+    - nexus-iq
+    - os_deployment
+    - never
+
+- name: Create internal certificate
+  ipa_certificate:
+    path: "{{ nexus_iq_ssl_dir }}/{{ inventory_hostname }}.pem"
+    privatekey: "{{ nexus_tls_key_file_path }}/{{ inventory_hostname }}.key"
+    dnsname: "{{ inventory_hostname }}"
+    principal: "HTTP/{{ inventory_hostname }}"
+  when: ipa_cert_stat.stat.exists != true
+  tags:
+    - os_install
+    - os_cert
+    - nexus-iq
+    - os_deployment
+
+# In case HTTP service certificate needs to be created additioanlly use something similar to
+- name: Create HTTP internal certificate
+  ipa_certificate:
+    path: "{{ nexus_ssl_dir }}/{{ nexus_iq_fqdn }}.pem"
+    privatekey: "{{ nexus_tls_key_file_path }}/{{ nexus_iq_fqdn }}.key"
+    dnsname: "{{ nexus_iq_fqdn }}"
+    principal: "HTTP/{{ nexus_iq_fqdn }}"
+  when: ipa_cert_service_stat.stat.exists != true
+  tags:
+    - os_install
+    - os_cert
+    - nexus-iq
+    - os_deployment
+    - never
+
+- name: Install packages
+  package:
+    name: "{{ item }}"
+    state: latest
+  with_items: "{{ nexus_iq_os_packages }}"
+  tags:
+    - os_install
+    - nexus-iq
+    - os_deployment
+
+- name: Create group
+  group:
+    name: "{{ nexus_group }}"
+    system: true
+    state: "present"
+  tags:
+    - os_configure
+    - os_user
+    - nexus-iq
+    - os_deployment
+
+- name: Add Nexus OS user
+  become: true
+  user:
+    name: "{{ nexus_owner }}"
+    comment: "Nexus OS User"
+    group: "{{ nexus_group }}"
+  tags:
+    - os_configure
+    - os_user
+    - nexus-iq
+    - os_deployment
+
+- name: Create Nexus IQ config  directory
+  file:
+    path: "{{ item }}"
+    state: directory
+  with_items:
+    - "{{ nexus_iq_os_base_directory }}"
+    - "{{ nexus_iq_os_base_directory }}/nexus-iq-server"
+  tags:
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Download Nexus IQ tar archive
+  get_url:
+    url: "{{ nexus_iq_os_archive_url }}"
+    dest: "{{ nexus_iq_os_archive_path }}"
+    owner: "{{ nexus_owner }}"
+    group: "{{ nexus_group }}"
+  tags:
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Extract Nexus archive name
+  shell: |
+    basename {{ nexus_iq_os_archive_path }}/nexus-iq-server*bundle.tar.gz
+  register: archive_filename
+  tags:
+    - os_version
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Extract Nexus version
+  shell: |
+    ls {{ nexus_os_archive_path }} | grep -i 'nexus-iq-server.*bundle.tar.gz' | grep -oE '([0-9]+.[0-9]+.[0-9]+-.[0-9]+)'
+  register: version
+  tags:
+    - os_version
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Getting Nexus version
+  set_fact:
+    nexus_iq_archive_filename: "{{ archive_filename.stdout }}"
+    nexus_iq_version: "{{ version.stdout }}"
+    nexus_iq_os_run_directory: "{{ nexus_os_base_directory }}/nexus-iq-server"
+  tags:
+    - os_version
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Unarchive tar file
+  unarchive:
+    remote_src: yes
+    src: "{{ nexus_iq_os_archive_path }}/{{ nexus_iq_archive_filename }}"
+    dest: "{{ nexus_iq_os_run_directory }}"
+    owner: "{{ nexus_owner }}"
+    group: "{{ nexus_group }}"
+  tags:
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Set permissions in Nexus folder
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ nexus_owner }}"
+    group: "{{ nexus_group }}"
+    recurse: yes
+  with_items:
+    - "{{ nexus_iq_os_run_directory }}"
+  tags:
+    - os_configure
+    - nexus-iq
+    - os_deployment
+
+- name: Add systemd unit
+  template:
+    src: "etc/systemd/system/nexus-iq.service.j2"
+    dest: "/etc/systemd/system/nexus-iq.service"
+    owner: root
+    group: root
+    mode: 0644
+  notify: restart nexus-iq
+  tags:
+    - os_configure
+    - os_service
+    - nexus-iq
+    - os_deployment
+
+- name: Set httpd_can_network_connect flag on and keep it persistent across reboots
+  seboolean:
+    name: httpd_can_network_connect
+    state: yes
+    persistent: yes
+  tags:
+    - os_configure
+    - nexus-iq
+    - os_deployment
+    - never
+
+- name: Configure Nginx
+  template:
+    src: etc/nginx/nginx.conf.j2
+    dest: "/etc/nginx/nginx.conf"
+  tags:
+    - os_configure
+    - os_service
+    - os_nginx
+    - nexus-iq
+    - os_deployment
+    - never
+  notify: restart nginx
+
+- name: Enable services
+  service:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  with_items:
+    - "nexus-iq"
+    - "nginx"
+  tags:
+    - os_configure
+    - os_service
+    - os_nginx
+    - nexus-iq
+    - os_deployment
+
